@@ -308,12 +308,35 @@ class Handler(BaseHTTPRequestHandler):
         return page("Berths", body, user=DEMO_USER)
 
 
+def _addr_in_use(exc: OSError) -> bool:
+    import errno
+
+    busy = {errno.EADDRINUSE}
+    if hasattr(errno, "WSAEADDRINUSE"):
+        busy.add(errno.WSAEADDRINUSE)
+    return exc.errno in busy
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Run the bundled demo marina portal.")
     ap.add_argument("--port", type=int, default=int(os.environ.get("DEMO_MARINA_PORT", "8787")))
     ap.add_argument("--host", default="127.0.0.1")
     args = ap.parse_args()
-    httpd = ThreadingHTTPServer((args.host, args.port), Handler)
+    try:
+        httpd = ThreadingHTTPServer((args.host, args.port), Handler)
+    except OSError as exc:
+        if _addr_in_use(exc):
+            print(f"✗ port {args.port} is already in use", file=sys.stderr)
+            print(f"  something else is bound to {args.host}:{args.port}", file=sys.stderr)
+            print(file=sys.stderr)
+            print(f"  try  lsof -i :{args.port}     # then kill the old process", file=sys.stderr)
+            print(f"  or   portalc demo --port {args.port + 1}", file=sys.stderr)
+            print(
+                "       and set baseUrl in portals/demo-marina/portal.yaml to the same origin",
+                file=sys.stderr,
+            )
+            return 5
+        raise
     print(f"demo marina portal → http://{args.host}:{args.port}  (user {DEMO_USER})", flush=True)
     try:
         httpd.serve_forever()

@@ -10,7 +10,7 @@ import typer
 
 from . import __version__
 from .envfile import load_workspace_env
-from .errors import PortalcError, PortalDriftError, VerificationFailed
+from .errors import PortalcError, PortalDownError, PortalDriftError, VerificationFailed
 from .pipeline import (
     DEFAULT_MONTH,
     DEMO_PORTAL,
@@ -141,6 +141,17 @@ def demo_cmd(
     script = demo_server_script()
     info(f"{script}")
     info("sign in as skipper@demo-marina.test / demo-portal-password")
+    if _port_listening(host, port):
+        alt = port + 1
+        raise PortalDownError(
+            f"port {port} is already in use",
+            f"{host}:{port} already has a process — often a leftover `portalc demo`",
+            hint=(
+                f"lsof -i :{port}  then kill that PID,  "
+                f"or  portalc demo --port {alt}  and set baseUrl in "
+                f"portals/demo-marina/portal.yaml to http://{host}:{alt}"
+            ),
+        )
     if background:
         proc = start_demo_process(host, port)
         wait_for_http(f"http://{host}:{port}/healthz")
@@ -349,6 +360,14 @@ def doctor_cmd() -> None:
             "portalc verify          run the contract test",
         ]
     )
+
+
+def _port_listening(host: str, port: int) -> bool:
+    import socket
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(0.3)
+        return sock.connect_ex((host, port)) == 0
 
 
 def main() -> int:
