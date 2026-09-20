@@ -10,7 +10,7 @@ import typer
 
 from . import __version__
 from .envfile import load_workspace_env
-from .errors import PortalcError, VerificationFailed
+from .errors import PortalcError, PortalDriftError, VerificationFailed
 from .pipeline import (
     DEFAULT_MONTH,
     DEMO_PORTAL,
@@ -95,6 +95,10 @@ def init_cmd(
     result = init_demo(ws, base_url=base_url, force=force)
     ok(f"wrote {result['path']}")
     ok("wrote .env.example  (copy to .env — never commit values)")
+    if result["gitignoreUpdated"]:
+        ok("wrote .gitignore  (.env is ignored, so `git add .` cannot commit credentials)")
+    else:
+        ok(".gitignore already ignores .env")
     ok("wrote .github/workflows/portalc.yml")
     blank()
     next_steps(
@@ -241,7 +245,9 @@ def run_cmd(
         params[k] = v
     result = run_flow(ws, portal, flow, params=params, validate=True)
     if not result["ok"]:
-        raise VerificationFailed(
+        # `run` refusing rows is drift (exit 6), not a failed contract test (exit 8):
+        # the generated TS client maps 6 to PortalDriftError.
+        raise PortalDriftError(
             next(f.message for f in result["findings"] if not f.ok),
             [f.message for f in result["findings"] if not f.ok],
             data={"findings": [f.as_dict() for f in result["findings"]]},

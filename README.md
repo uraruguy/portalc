@@ -42,7 +42,7 @@ portalc verify                       # green again
 
 | Command | What it does |
 |---|---|
-| `portalc init --demo` | Workspace, `portal.yaml`, GitHub Action, `.env.example` |
+| `portalc init --demo` | Workspace, `portal.yaml`, GitHub Action, `.env.example`, `.gitignore` entry for `.env` |
 | `portalc demo` | Serve the bundled marina at `http://127.0.0.1:8787` |
 | `portalc explore --yes` | Sign in, extract, dry-run twice, write schema/flow/fixture |
 | `portalc verify` | Contract test: headers, JSON Schema, min rows. **No model.** |

@@ -165,8 +165,32 @@ def init_demo(ws: Workspace, *, base_url: str = "http://127.0.0.1:8787", force: 
         action.write_text(ACTION_YML)
 
     gitignore = ws.root / ".gitignore"
-    # already present in the repo; do not clobber
-    return {"portal": DEMO_PORTAL, "path": str(yaml_path), "baseUrl": base_url}
+    gitignore_updated = _ensure_env_gitignored(gitignore)
+    return {
+        "portal": DEMO_PORTAL,
+        "path": str(yaml_path),
+        "baseUrl": base_url,
+        "gitignore": str(gitignore),
+        "gitignoreUpdated": gitignore_updated,
+    }
+
+
+ENV_IGNORE_PATTERNS = {".env", "/.env", ".env*", "*.env", "**/.env"}
+
+
+def _ensure_env_gitignored(path: Path) -> bool:
+    """`init` writes a real .env, so the workspace must ignore it before `git add .`."""
+    if not path.exists():
+        path.write_text("# written by portalc init — credentials never belong in git\n.env\n")
+        return True
+    existing = path.read_text()
+    entries = {line.strip() for line in existing.splitlines()}
+    if entries & ENV_IGNORE_PATTERNS:
+        return False
+    separator = "" if existing.endswith("\n") or not existing else "\n"
+    with path.open("a") as fh:
+        fh.write(f"{separator}\n# added by portalc init — credentials never belong in git\n.env\n")
+    return True
 
 
 def _engine_for(cfg: PortalConfig) -> HttpEngine:
