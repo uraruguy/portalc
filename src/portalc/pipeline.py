@@ -81,6 +81,8 @@ policy:
   allowedDomains:
     - 127.0.0.1
     - localhost
+  timeoutSeconds: 15
+  retries: 2
   notes: >
     Bundled synthetic portal. Own-account demo credentials only.
     This is not a real marina and must not be pointed at production systems.
@@ -170,7 +172,7 @@ def init_demo(ws: Workspace, *, base_url: str = "http://127.0.0.1:8787", force: 
 
 
 def _engine_for(cfg: PortalConfig) -> HttpEngine:
-    return HttpEngine(cfg.base_url)
+    return HttpEngine(cfg.base_url, policy=cfg.request_policy)
 
 
 def _login(cfg: PortalConfig, engine: HttpEngine) -> None:
