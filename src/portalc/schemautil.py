@@ -2,12 +2,29 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Any
 
 from jsonschema import Draft202012Validator
 
 from .errors import Finding, PortalDriftError
 from .extract import Column, ExtractedTable
+
+
+def canonical_json(payload: Any) -> str:
+    """Byte-stable JSON for hashing: sorted keys, no incidental whitespace.
+
+    Two files that mean the same schema hash the same, so re-indenting a
+    committed artifact is not reported as drift — while any change to a field
+    name, type or header is.
+    """
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True, default=str)
+
+
+def content_fingerprint(payload: Any) -> str:
+    """`sha256:<hex>` over the canonical form of a flow, schema or lockfile."""
+    return "sha256:" + hashlib.sha256(canonical_json(payload).encode()).hexdigest()
 
 
 def schema_from_table(table: ExtractedTable, title: str) -> dict[str, Any]:

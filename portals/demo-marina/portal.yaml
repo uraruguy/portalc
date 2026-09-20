@@ -13,6 +13,8 @@ policy:
   allowedDomains:
     - 127.0.0.1
     - localhost
+  timeoutSeconds: 15
+  retries: 2
   notes: >
     Bundled synthetic portal. Own-account demo credentials only.
     This is not a real marina and must not be pointed at production systems.
