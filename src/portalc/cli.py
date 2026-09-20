@@ -62,6 +62,22 @@ def _ws() -> Workspace:
     return prepare(ws)
 
 
+def _chrome_options(
+    cdp_url: Optional[str] = None,
+    headless: bool = False,
+    profile: Optional[Path] = None,
+) -> dict:
+    """Only ever passed to the chrome engine; the HTTP engine takes no options."""
+    options: dict = {}
+    if cdp_url:
+        options["cdp_url"] = cdp_url
+    if headless:
+        options["headless"] = True
+    if profile:
+        options["profile_dir"] = profile
+    return options
+
+
 @app.callback(invoke_without_command=False)
 def _root(
     debug: bool = typer.Option(False, "--debug", help="Show Python tracebacks."),
@@ -139,21 +155,41 @@ def explore_cmd(
     flow: str = typer.Option("list-invoices", "--flow", help="Flow to compile."),
     month: str = typer.Option(DEFAULT_MONTH, "--month"),
     yes: bool = typer.Option(False, "--yes", "-y", help="Accept the inferred schema without a prompt."),
-    engine: str = typer.Option("http", "--engine", help="http (deterministic) or chrome (not in v0.1)."),
+    engine: str = typer.Option("http", "--engine", help="http (deterministic HTML) or chrome (real browser over CDP)."),
+    agent: bool = typer.Option(False, "--agent", help="Let a browser-use agent find the page first (optional extra)."),
+    cdp_url: Optional[str] = typer.Option(None, "--cdp-url", help="Attach to a Chrome you already signed into, e.g. http://127.0.0.1:9222."),
+    headless: bool = typer.Option(False, "--headless", help="Chrome without a window (no human login possible)."),
+    chrome_profile: Optional[Path] = typer.Option(None, "--chrome-profile", help="Chrome user-data-dir to reuse (default ~/.portalc/chrome-profile)."),
 ) -> None:
-    """Walk a portal once and write schema + flow + fixture. No LLM on --engine http."""
+    """Walk a portal once and write schema + flow + fixture. The LLM is opt-in (--agent)."""
     ws = _ws()
-    banner("explore", f"{portal}/{flow}")
-    step("signing in (credentials from the environment, never from git)")
-    result = explore(ws, portal, flow, month=month, engine_name=engine, accept=yes or not console().is_terminal)
+    banner("explore", f"{portal}/{flow}  ·  engine {engine}")
+    if engine == "chrome":
+        step("opening Chrome — you sign in, portalc inherits the session")
+    else:
+        step("signing in (credentials from the environment, never from git)")
+    result = explore(
+        ws,
+        portal,
+        flow,
+        month=month,
+        engine_name=engine,
+        engine_options=_chrome_options(cdp_url, headless, chrome_profile),
+        use_agent=agent,
+        accept=yes or not console().is_terminal,
+    )
     schema_table(f"schema  {flow}", result["columns"])
     ok(f"{result['rowCount']} rows  ·  dry-run  {result.get('dryRuns', 2)}/2 identical")
     if result.get("preview"):
         warn("schema not written (re-run with --yes to compile)")
         raise typer.Exit(2)
+    if result.get("agentNotes"):
+        info(f"agent: {result['agentNotes']}")
     ok(f"wrote {result['flowPath']}")
     ok(f"wrote {result['schemaPath']}")
     ok(f"wrote {result['fixturePath']}")
+    if result.get("screenshotPath"):
+        ok(f"wrote {result['screenshotPath']}  (evidence)")
     cost_note(result.get("agentUsd"), result.get("browserSeconds") or 0, result.get("engine") or "http")
     blank()
     next_steps(
@@ -182,12 +218,23 @@ def verify_cmd(
     flow: Optional[str] = typer.Option(None, "--flow"),
     all_portals: bool = typer.Option(False, "--all", help="Every compiled portal in the workspace."),
     month: str = typer.Option(DEFAULT_MONTH, "--month"),
+    engine: Optional[str] = typer.Option(None, "--engine", help="Override the engine the flow was compiled with."),
+    cdp_url: Optional[str] = typer.Option(None, "--cdp-url", help="Attach to a running Chrome instead of starting one."),
+    headless: bool = typer.Option(False, "--headless", help="Run Chrome without a window (CI)."),
+    chrome_profile: Optional[Path] = typer.Option(None, "--chrome-profile", help="Chrome user-data-dir holding the signed-in session."),
 ) -> None:
     """Run contract tests. The model does not get a vote."""
     ws = _ws()
     banner("verify", portal or "all portals")
     try:
-        payload = verify(ws, None if all_portals or portal is None else portal, flow, params={"month": month})
+        payload = verify(
+            ws,
+            None if all_portals or portal is None else portal,
+            flow,
+            params={"month": month},
+            engine_name=engine,
+            engine_options=_chrome_options(cdp_url, headless, chrome_profile),
+        )
     except VerificationFailed as exc:
         if exc.data and exc.data.get("reports"):
             for report in exc.data["reports"]:
@@ -197,10 +244,11 @@ def verify_cmd(
                     bad(f"{report['portal']}/{report['flow']}")
                     findings_table(report["findings"])
         raise
+    engines = sorted({report.get("engine", "http") for report in payload["reports"]})
     for report in payload["reports"]:
         ok(f"{report['portal']}/{report['flow']}  {len(report['rows'])} rows")
         findings_table(report["findings"])
-    cost_note(None, 1.0, "http")
+    cost_note(None, 1.0, "+".join(engines) or "http")
 
 
 @app.command("repair")
@@ -208,14 +256,30 @@ def repair_cmd(
     portal: str = typer.Argument(DEMO_PORTAL),
     flow: str = typer.Option("list-invoices", "--flow"),
     month: str = typer.Option(DEFAULT_MONTH, "--month"),
+    engine: Optional[str] = typer.Option(None, "--engine", help="Override the engine the flow was compiled with."),
+    agent: bool = typer.Option(False, "--agent", help="If the rename patch does not apply, ask a browser-use agent where the data moved."),
+    cdp_url: Optional[str] = typer.Option(None, "--cdp-url", help="Attach to a running Chrome instead of starting one."),
+    headless: bool = typer.Option(False, "--headless", help="Run Chrome without a window (CI)."),
+    chrome_profile: Optional[Path] = typer.Option(None, "--chrome-profile", help="Chrome user-data-dir holding the signed-in session."),
 ) -> None:
     """Re-read the live page and write a patch if the drift is a column rename."""
     ws = _ws()
     banner("repair", f"{portal}/{flow}")
-    step("re-reading the live page (no LLM on --engine http)")
-    result = repair(ws, portal, flow, params={"month": month})
-    ok(f"rename patch  →  v{result['version']}  ·  confirmations {result['confirmations']}/2")
+    step("re-reading the live page" + ("" if agent else " (no LLM unless you pass --agent)"))
+    result = repair(
+        ws,
+        portal,
+        flow,
+        params={"month": month},
+        engine_name=engine,
+        engine_options=_chrome_options(cdp_url, headless, chrome_profile),
+        use_agent=agent,
+    )
+    label = "rename patch" if result["kind"] == "rename" else "moved-page patch"
+    ok(f"{label}  →  v{result['version']}  ·  confirmations {result['confirmations']}/2")
     diff_block(result["diff"])
+    if result.get("agentNotes"):
+        info(f"agent: {result['agentNotes']}")
     ok(f"PR body  {result['prPath']}")
     cost_note(result.get("agentUsd"), result.get("browserSeconds") or 0, result.get("engine") or "http")
     blank()
@@ -234,6 +298,10 @@ def run_cmd(
     flow: str = typer.Argument(...),
     set_pairs: list[str] = typer.Option(None, "--set", help="key=value flow params, e.g. month=2026-09"),
     json_out: bool = typer.Option(False, "--json", help="Print rows as JSON (also used by the generated TS client)."),
+    engine: Optional[str] = typer.Option(None, "--engine", help="Override the engine the flow was compiled with."),
+    cdp_url: Optional[str] = typer.Option(None, "--cdp-url", help="Attach to a running Chrome instead of starting one."),
+    headless: bool = typer.Option(False, "--headless", help="Run Chrome without a window."),
+    chrome_profile: Optional[Path] = typer.Option(None, "--chrome-profile", help="Chrome user-data-dir holding the signed-in session."),
 ) -> None:
     """Execute a compiled flow. Refuses to return rows that fail the schema."""
     ws = _ws()
@@ -243,7 +311,15 @@ def run_cmd(
             raise typer.BadParameter(f"--set expects key=value, got {pair!r}")
         k, _, v = pair.partition("=")
         params[k] = v
-    result = run_flow(ws, portal, flow, params=params, validate=True)
+    result = run_flow(
+        ws,
+        portal,
+        flow,
+        params=params,
+        validate=True,
+        engine_name=engine,
+        engine_options=_chrome_options(cdp_url, headless, chrome_profile),
+    )
     if not result["ok"]:
         # `run` refusing rows is drift (exit 6), not a failed contract test (exit 8):
         # the generated TS client maps 6 to PortalDriftError.

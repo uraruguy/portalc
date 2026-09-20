@@ -17,10 +17,10 @@ from .codegen import generate_ts_client
 from .engine import HttpEngine, dump_evidence, rows_fingerprint
 from .envfile import load_workspace_env
 from .errors import (
-    BrowserUnavailableError,
     ConfigError,
     Finding,
     PortalAuthError,
+    PortalDownError,
     PortalDriftError,
     UsageError,
     VerificationFailed,
@@ -195,11 +195,55 @@ def _ensure_env_gitignored(path: Path) -> bool:
     return True
 
 
-def _engine_for(cfg: PortalConfig) -> HttpEngine:
-    return HttpEngine(cfg.base_url, policy=cfg.request_policy)
+def _engine_for(
+    cfg: PortalConfig,
+    engine_name: str = "http",
+    engine_options: dict[str, Any] | None = None,
+) -> Any:
+    """Pick the browser layer. It is a plug-in: the artifacts do not depend on it.
+
+    Both engines get the portal's parsed `policy:` block, so the allowlist and
+    the read-only rule hold whichever one a flow was compiled against.
+    """
+    if engine_name in ("http", "", None):
+        return HttpEngine(cfg.base_url, policy=cfg.request_policy)
+    if engine_name == "chrome":
+        from .chrome import ChromeEngine
+
+        return ChromeEngine.start(cfg.base_url, policy=cfg.request_policy, **(engine_options or {}))
+    raise UsageError(
+        f"unknown engine {engine_name!r}",
+        "portalc has two: http (deterministic HTML) and chrome (real browser over CDP)",
+        hint="--engine http   or   --engine chrome",
+    )
 
 
-def _login(cfg: PortalConfig, engine: HttpEngine) -> None:
+def _close_engine(engine: Any) -> None:
+    close = getattr(engine, "close", None)
+    if callable(close):
+        close()
+
+
+def _engine_name(engine: Any) -> str:
+    return getattr(engine, "name", "http")
+
+
+def _browser_seconds(engine: Any, fallback: float) -> float:
+    return float(getattr(engine, "browser_seconds", None) or fallback)
+
+
+def _login(cfg: PortalConfig, engine: Any, *, interactive: bool = False) -> None:
+    """Get an authenticated session, without portalc ever owning one it should not.
+
+    `human-session` is the mode a real portal should use: the human signs in in
+    the browser window, and later runs inherit that session from the Chrome
+    profile. A stale profile surfaces as `PortalAuthError` from the first fetch,
+    which is the honest answer — not a failed schema check.
+    """
+    if cfg.auth_mode == "human-session":
+        if interactive and hasattr(engine, "await_human_login"):
+            engine.await_human_login(login_path=cfg.auth.get("loginPath") or "/")
+        return
     if cfg.name == DEMO_PORTAL:
         user = os.environ.get("DEMO_MARINA_USER", DEMO_USER)
         password = os.environ.get("DEMO_MARINA_PASS", DEMO_PASS)
@@ -213,7 +257,10 @@ def _login(cfg: PortalConfig, engine: HttpEngine) -> None:
                 hint="export the env vars named under auth.secrets in portal.yaml",
             )
     path = (cfg.auth.get("loginPath") or "/login")
-    engine.login(user, password, path=path)
+    if _engine_name(engine) == "chrome":
+        engine.login(user, password, path=path, selectors=cfg.auth.get("selectors"))
+    else:
+        engine.login(user, password, path=path)
 
 
 def _month(params: dict[str, str]) -> str:
@@ -229,23 +276,48 @@ def explore(
     marker: str = "invoices",
     path: str = "/invoices",
     engine_name: str = "http",
+    engine_options: dict[str, Any] | None = None,
+    use_agent: bool = False,
+    agent_runner: Any = None,
     accept: bool = True,
 ) -> dict[str, Any]:
-    if engine_name == "chrome":
-        raise BrowserUnavailableError(
-            "the Chrome/CDP engine is not wired up in v0.1",
-            "explore currently uses the deterministic HTTP engine (enough for the bundled demo and for any portal that is a form + HTML table).",
-            hint="run without --engine chrome, or attach a real Chrome in a later release via browser-harness",
-        )
     cfg = PortalConfig.load(ws, portal)
-    engine = _engine_for(cfg)
-    _login(cfg, engine)
+    engine = _engine_for(cfg, engine_name, engine_options)
+    agent_usd: float | None = None
+    agent_notes = ""
+    query = {"month": month}
+    try:
+        _login(cfg, engine, interactive=True)
 
-    runs = []
-    for _ in range(2):
-        result = engine.fetch_table(path, query={"month": month}, marker=marker)
-        assert result.table is not None
-        runs.append(result)
+        if use_agent:
+            from . import agent as agent_mod
+
+            proposal = agent_mod.propose(
+                agent_mod.explore_task(cfg.base_url, flow, {"month": month}),
+                base_url=cfg.base_url,
+                cdp_url=getattr(engine, "devtools_url", None),
+                allowed_domains=cfg.allowed_domains,
+                runner=agent_runner,
+            )
+            path = proposal.path
+            marker = proposal.marker or marker
+            query = proposal.query or query
+            agent_usd = proposal.usd
+            agent_notes = proposal.notes
+
+        runs = []
+        for _ in range(2):
+            result = engine.fetch_table(path, query=query, marker=marker)
+            assert result.table is not None
+            runs.append(result)
+        screenshot = (
+            engine.screenshot_png() if hasattr(engine, "screenshot_png") else b""
+        )
+        browser_seconds = _browser_seconds(engine, 1.0)
+        engine_used = _engine_name(engine)
+    finally:
+        _close_engine(engine)
+
     a, b = runs
     if rows_fingerprint(a.table.rows) != rows_fingerprint(b.table.rows):
         raise PortalDriftError(
@@ -261,19 +333,21 @@ def explore(
         "apiVersion": API_VERSION,
         "name": flow,
         "schema": schema_name,
-        "engine": "http",
+        "engine": engine_used,
         "params": {"month": {"type": "string", "default": month}},
         "steps": [
             {"action": "login", "path": cfg.auth.get("loginPath") or "/login"},
             {
                 "action": "extract_table",
                 "path": path,
-                "query": {"month": "{{month}}"},
+                "query": {k: ("{{month}}" if k == "month" else v) for k, v in query.items()},
                 "marker": marker,
                 "headerContract": table.header_contract(),
             },
         ],
     }
+    if agent_notes:
+        flow_doc["compiledBy"] = {"agent": True, "notes": agent_notes}
     checks = {
         "minRows": 1,
         "currencyIn": ["EUR"] if "currency" in table.field_names() else None,
@@ -298,6 +372,10 @@ def explore(
     evidence = cfg.evidence_dir() / f"{_today()}.{flow}.html"
     evidence.parent.mkdir(parents=True, exist_ok=True)
     evidence.write_text(dump_evidence(a.html))
+    shot_path = None
+    if screenshot:
+        shot_path = cfg.evidence_dir() / f"{_today()}.{flow}.png"
+        shot_path.write_bytes(screenshot)
 
     changelog = cfg.dir / "CHANGELOG.md"
     with changelog.open("a") as fh:
@@ -319,10 +397,12 @@ def explore(
         "flowPath": str(cfg.flow_path(flow)),
         "schemaPath": str(cfg.schema_path(schema_name)),
         "fixturePath": str(fixture),
+        "screenshotPath": str(shot_path) if shot_path else None,
         "dryRuns": 2,
-        "engine": "http",
-        "agentUsd": None,
-        "browserSeconds": 1.0,
+        "engine": engine_used,
+        "agentUsd": agent_usd,
+        "agentNotes": agent_notes,
+        "browserSeconds": browser_seconds,
     }
 
 
@@ -338,6 +418,9 @@ def run_flow(
     *,
     params: dict[str, str] | None = None,
     validate: bool = True,
+    engine_name: str | None = None,
+    engine_options: dict[str, Any] | None = None,
+    engine: Any = None,
 ) -> dict[str, Any]:
     cfg = PortalConfig.load(ws, portal)
     flow_doc = read_json(cfg.flow_path(flow), "flow")
@@ -351,9 +434,17 @@ def run_flow(
     query = {k: _subst(v, values) for k, v in (extract_step.get("query") or {}).items()}
     marker = extract_step.get("marker") or "invoices"
 
-    engine = _engine_for(cfg)
-    _login(cfg, engine)
-    result = engine.fetch_table(path, query=query, marker=marker)
+    # A flow remembers which engine compiled it; --engine overrides that. Either
+    # way this path is deterministic: no model has a vote in run or verify.
+    own_engine = engine is None
+    if own_engine:
+        engine = _engine_for(cfg, engine_name or flow_doc.get("engine") or "http", engine_options)
+    try:
+        _login(cfg, engine)
+        result = engine.fetch_table(path, query=query, marker=marker)
+    finally:
+        if own_engine:
+            _close_engine(engine)
     table = result.table
     assert table is not None
 
@@ -404,6 +495,7 @@ def run_flow(
         "schemaName": schema_name,
         "flow": flow_doc,
         "cfg": cfg,
+        "engine": _engine_name(engine),
     }
 
 
@@ -420,6 +512,8 @@ def verify(
     flow: str | None = None,
     *,
     params: dict[str, str] | None = None,
+    engine_name: str | None = None,
+    engine_options: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     names = [portal] if portal else ws.list_portals()
     if not names:
@@ -437,21 +531,40 @@ def verify(
                 f"portal {name!r} has no compiled flows",
                 hint=f"portalc explore {name} --flow list-invoices --yes",
             )
-        for fl in flows:
-            result = run_flow(ws, name, fl, params=params, validate=True)
-            reports.append({"portal": name, "flow": fl, **{k: result[k] for k in ("ok", "findings", "rows")}})
-            if result["ok"]:
-                record_green(
+        # One browser per portal, not one per flow: starting Chrome is the
+        # expensive part of a nightly run.
+        wanted = engine_name or _engine_of_flows(cfg, flows)
+        shared = _engine_for(cfg, wanted, engine_options) if wanted == "chrome" else None
+        try:
+            for fl in flows:
+                result = run_flow(
                     ws,
                     name,
                     fl,
-                    schema_name=result["schemaName"],
-                    version=_portal_version(ws, name),
-                    flow_path=cfg.flow_path(fl),
-                    schema_path=cfg.schema_path(result["schemaName"]),
+                    params=params,
+                    validate=True,
+                    engine_name=engine_name,
+                    engine_options=engine_options,
+                    engine=shared,
                 )
-            else:
-                all_ok = False
+                reports.append(
+                    {"portal": name, "flow": fl, **{k: result[k] for k in ("ok", "findings", "rows", "engine")}}
+                )
+                if result["ok"]:
+                    record_green(
+                        ws,
+                        name,
+                        fl,
+                        schema_name=result["schemaName"],
+                        version=_portal_version(ws, name),
+                        flow_path=cfg.flow_path(fl),
+                        schema_path=cfg.schema_path(result["schemaName"]),
+                    )
+                else:
+                    all_ok = False
+        finally:
+            if shared is not None:
+                _close_engine(shared)
     payload = {"ok": all_ok, "reports": reports}
     if not all_ok:
         # pick the first field-level message
@@ -472,17 +585,53 @@ def _flows_on_disk(cfg: PortalConfig) -> list[str]:
     return sorted(p.name[: -len(".flow.json")] for p in d.glob("*.flow.json"))
 
 
+def _engine_of_flows(cfg: PortalConfig, flows: list[str]) -> str:
+    """"chrome" only when every flow was compiled against a browser."""
+    engines = set()
+    for fl in flows:
+        path = cfg.flow_path(fl)
+        if path.is_file():
+            engines.add(read_json(path, "flow").get("engine") or "http")
+    return "chrome" if engines == {"chrome"} else "http"
+
+
 def repair(
     ws: Workspace,
     portal: str,
     flow: str,
     *,
     params: dict[str, str] | None = None,
+    engine_name: str | None = None,
+    engine_options: dict[str, Any] | None = None,
+    use_agent: bool = False,
+    agent_runner: Any = None,
 ) -> dict[str, Any]:
-    """Deterministic repair for header renames. No LLM in v0.1 HTTP engine."""
+    """Deterministic repair for header renames; `--agent` for anything harder.
+
+    The agent only ever says *where* to look. What it proposes is then read by
+    the deterministic engine, checked against the schema and confirmed twice
+    before a single file changes.
+    """
     cfg = PortalConfig.load(ws, portal)
     before = read_json(cfg.schema_path(read_json(cfg.flow_path(flow), "flow")["schema"]), "schema")
-    live = run_flow(ws, portal, flow, params=params, validate=False)
+    try:
+        live = run_flow(
+            ws, portal, flow, params=params, validate=False,
+            engine_name=engine_name, engine_options=engine_options,
+        )
+    except (PortalDownError, PortalDriftError) as exc:
+        if not use_agent:
+            raise
+        return _agent_repair(
+            ws,
+            portal,
+            flow,
+            failure=exc.title,
+            params=params,
+            engine_name=engine_name,
+            engine_options=engine_options,
+            agent_runner=agent_runner,
+        )
     table = live["table"]
     schema = live["schema"]
     flow_doc = live["flow"]
@@ -510,15 +659,9 @@ def repair(
             fh.write(f"- {_today()}  repair `{flow}` (patch {version}): {'; '.join(bits)}\n")
 
         # confirm
-        confirmed = run_flow(ws, portal, flow, params=params, validate=True)
-        if not confirmed["ok"]:
-            raise PortalDriftError(
-                "repair updated headers but verify still fails",
-                [f.message for f in confirmed["findings"] if not f.ok],
-            )
-        confirmed2 = run_flow(ws, portal, flow, params=params, validate=True)
-        if not confirmed2["ok"]:
-            raise PortalDriftError("repair failed the second confirmation run")
+        _confirm_twice(
+            ws, portal, flow, params=params, engine_name=engine_name, engine_options=engine_options
+        )
         record_green(
             ws,
             portal,
@@ -545,17 +688,228 @@ def repair(
             "prPath": str(pr_path),
             "prBody": pr_body,
             "confirmations": 2,
-            "engine": "http",
+            "engine": live.get("engine") or "http",
             "agentUsd": None,
             "browserSeconds": 2.0,
         }
 
+    if use_agent:
+        return _agent_repair(
+            ws,
+            portal,
+            flow,
+            failure="; ".join(f.message for f in findings if not f.ok) or "the compiled schema no longer matches the page",
+            params=params,
+            engine_name=engine_name,
+            engine_options=engine_options,
+            agent_runner=agent_runner,
+        )
+
     raise PortalDriftError(
         "repair cannot auto-patch this drift",
         [f.message for f in findings if not f.ok] or ["field names changed, not just titles"],
-        hint="open the portal, re-run portalc explore --yes after reviewing the new schema",
+        hint="portalc repair --agent  (browser-use, explore/repair only), or re-run portalc explore --yes after reviewing the new schema",
         data={"expected": expected, "live": live_headers},
     )
+
+
+def _confirm_twice(
+    ws: Workspace,
+    portal: str,
+    flow: str,
+    *,
+    params: dict[str, str] | None,
+    engine_name: str | None,
+    engine_options: dict[str, Any] | None,
+) -> None:
+    """Two green runs in a row, or no patch. One green run is a coincidence."""
+    for attempt in (1, 2):
+        confirmed = run_flow(
+            ws, portal, flow, params=params, validate=True,
+            engine_name=engine_name, engine_options=engine_options,
+        )
+        if not confirmed["ok"]:
+            raise PortalDriftError(
+                f"the patch did not hold on confirmation {attempt}/2",
+                [f.message for f in confirmed["findings"] if not f.ok],
+                hint="portalc opens an issue rather than a PR when a repair cannot be confirmed twice",
+            )
+
+
+def _agent_repair(
+    ws: Workspace,
+    portal: str,
+    flow: str,
+    *,
+    failure: str,
+    params: dict[str, str] | None = None,
+    engine_name: str | None = None,
+    engine_options: dict[str, Any] | None = None,
+    agent_runner: Any = None,
+) -> dict[str, Any]:
+    """Ask an agent where the data moved, then prove it deterministically.
+
+    The agent's answer is a hypothesis. It becomes a patch only if the
+    deterministic engine reads the same rows twice at the proposed location and
+    the result still satisfies the committed schema.
+    """
+    from . import agent as agent_mod
+
+    cfg = PortalConfig.load(ws, portal)
+    flow_doc = read_json(cfg.flow_path(flow), "flow")
+    schema_name = flow_doc["schema"]
+    schema = read_json(cfg.schema_path(schema_name), "schema")
+    extract_step = next(s for s in flow_doc["steps"] if s["action"] == "extract_table")
+    old_path = extract_step["path"]
+    old_marker = extract_step.get("marker") or "invoices"
+    wanted = engine_name or flow_doc.get("engine") or "http"
+
+    engine = _engine_for(cfg, wanted, engine_options)
+    try:
+        _login(cfg, engine)
+        proposal = agent_mod.propose(
+            agent_mod.repair_task(cfg.base_url, flow, failure, old_path),
+            base_url=cfg.base_url,
+            cdp_url=getattr(engine, "devtools_url", None),
+            allowed_domains=cfg.allowed_domains,
+            runner=agent_runner,
+        )
+        month = _month(params or {})
+        query = proposal.query or {k: _subst(v, {"month": month}) for k, v in (extract_step.get("query") or {}).items()}
+        runs = []
+        for _ in range(2):
+            result = engine.fetch_table(
+                proposal.path, query=query, marker=proposal.marker or old_marker
+            )
+            assert result.table is not None
+            runs.append(result)
+        browser_seconds = _browser_seconds(engine, 2.0)
+        engine_used = _engine_name(engine)
+    finally:
+        _close_engine(engine)
+
+    first, second = runs
+    if rows_fingerprint(first.table.rows) != rows_fingerprint(second.table.rows):
+        raise PortalDriftError(
+            "the agent found a page that does not read the same twice",
+            [f"proposed path: {proposal.path}", proposal.notes],
+            hint="portalc will not compile a non-deterministic flow, from an agent or from you",
+        )
+
+    required = set((schema.get("items") or {}).get("required") or [])
+    live_fields = set(first.table.field_names())
+    if not required.issubset(live_fields):
+        raise PortalDriftError(
+            "the agent's proposal does not satisfy the committed schema",
+            [
+                f"missing required fields: {', '.join(sorted(required - live_fields))}",
+                f"proposed path: {proposal.path}",
+                proposal.notes,
+            ],
+            hint="this is a schema change, not a repair: review it by hand with portalc explore",
+        )
+
+    extract_step["path"] = proposal.path
+    extract_step["marker"] = proposal.marker or old_marker
+    extract_step["headerContract"] = first.table.header_contract()
+    if proposal.query:
+        extract_step["query"] = dict(proposal.query)
+    schema.setdefault("x-portalc", {})["headers"] = {c.name: c.header for c in first.table.columns}
+    # New optional fields are a minor bump; a moved page with the same contract is a patch.
+    level = "minor" if live_fields - set((schema.get("items") or {}).get("properties") or {}) else "patch"
+    version = bump(_portal_version(ws, portal), level)
+    write_json(cfg.flow_path(flow), flow_doc)
+    write_json(cfg.schema_path(schema_name), schema)
+    lock = load_lock(ws)
+    lock.setdefault("portals", {}).setdefault(portal, {})["version"] = version
+    from .lockfile import save_lock
+
+    save_lock(ws, lock)
+
+    _confirm_twice(
+        ws, portal, flow, params=params, engine_name=engine_name, engine_options=engine_options
+    )
+    record_green(
+        ws,
+        portal,
+        flow,
+        schema_name=schema_name,
+        version=version,
+        flow_path=cfg.flow_path(flow),
+        schema_path=cfg.schema_path(schema_name),
+    )
+    with (cfg.dir / "CHANGELOG.md").open("a") as fh:
+        fh.write(
+            f"- {_today()}  repair `{flow}` ({level} {version}): table moved "
+            f"{old_path} → {proposal.path} (agent proposal, 2/2 confirmed)\n"
+        )
+    diff_lines = [f"- path: {old_path}", f"+ path: {proposal.path}"]
+    if (proposal.marker or old_marker) != old_marker:
+        diff_lines += [f"- marker: {old_marker}", f"+ marker: {proposal.marker}"]
+    pr_body = _agent_pr_body(
+        portal, flow, failure, old_path, proposal, version, level, engine_used, browser_seconds
+    )
+    pr_path = ws.state_dir / f"repair-{portal}-{flow}.md"
+    pr_path.parent.mkdir(parents=True, exist_ok=True)
+    pr_path.write_text(pr_body)
+    generate_ts_client(ws, portal, schema, flow, version)
+    return {
+        "kind": "moved",
+        "version": version,
+        "diff": diff_lines,
+        "prPath": str(pr_path),
+        "prBody": pr_body,
+        "confirmations": 2,
+        "engine": engine_used,
+        "agentUsd": proposal.usd,
+        "agentNotes": proposal.notes,
+        "browserSeconds": browser_seconds,
+    }
+
+
+def _agent_pr_body(
+    portal: str,
+    flow: str,
+    failure: str,
+    old_path: str,
+    proposal: Any,
+    version: str,
+    level: str,
+    engine: str,
+    browser_seconds: float,
+) -> str:
+    cost = f"${proposal.usd:.2f} agent" if proposal.usd is not None else "agent cost not reported"
+    lines = [
+        f"portalc: {portal} drift — {flow} reads from a different page",
+        "",
+        f"- portal: `{portal}`",
+        f"- flow: `{flow}`",
+        f"- proposed version: `{version}` ({level})",
+        "- confirmations: 2/2 green after patch",
+        f"- engine: `{engine}`  ·  cost: {cost}, browser {browser_seconds:.0f}s",
+        "",
+        "What the contract test saw",
+        "",
+        f"- {failure}",
+        "",
+        "What the agent found",
+        "",
+        f"- `{old_path}` → `{proposal.path}`",
+    ]
+    if proposal.notes:
+        lines.append(f"- {proposal.notes}")
+    lines += [
+        "",
+        "How this was checked",
+        "",
+        "- the agent only proposed a location; the rows were read by the deterministic engine",
+        "- the same rows came back twice, and still validate against the committed schema",
+        "- `verify` ran twice after the patch and was green both times",
+        "",
+        "Read the diff before merging. Write-flows never auto-merge.",
+        "",
+    ]
+    return "\n".join(lines) + "\n"
 
 
 def _pr_body(portal: str, flow: str, old: dict[str, str], new: dict[str, str], version: str, findings: list[Finding]) -> str:
@@ -605,13 +959,19 @@ def doctor(ws: Workspace) -> list[Finding]:
         findings.append(Finding(check="jsonschema", ok=True, message="installed"))
     except ImportError:
         findings.append(Finding(check="jsonschema", ok=False, message="missing — pip install -e ."))
-    chrome = shutil.which("google-chrome") or shutil.which("chromium") or shutil.which("chromium-browser")
+    from .chrome import chrome_status
+
+    chrome = chrome_status()
     findings.append(
         Finding(
             check="chrome",
             ok=True,
-            severity="info" if chrome else "warn",
-            message=chrome or "not found (optional; HTTP engine does not need it)",
+            severity="info" if chrome["ok"] else "warn",
+            message=(
+                f"{chrome['version'] or chrome['binary']}  ({chrome['binary']}) — --engine chrome ready"
+                if chrome["ok"]
+                else "not found (optional; the HTTP engine does not need it)"
+            ),
         )
     )
     try:
