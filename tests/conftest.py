@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import os
+import pty
+import re
 import socket
 import subprocess
 import sys
@@ -19,6 +21,13 @@ if str(ROOT / "src") not in sys.path:
 MUTATE = ROOT / "demo" / "mutate.py"
 DEMO_USER = "skipper@demo-marina.test"
 DEMO_PASS = "demo-portal-password"
+
+_ANSI = re.compile(r"\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
+
+
+def _plain(text: str) -> str:
+    """Rich splits even `--demo` into styled runs; assertions read the text, not the styling."""
+    return _ANSI.sub("", text).replace("\r\n", "\n")
 
 
 def _free_port() -> int:
@@ -119,23 +128,66 @@ class CliResult:
 def cli() -> Callable[..., CliResult]:
     """Run the CLI the way a user does, but against this checkout rather than any installed copy."""
 
-    def run(*args: str, cwd: Path | None = None, env: dict[str, str] | None = None) -> CliResult:
+    def run(
+        *args: str,
+        cwd: Path | None = None,
+        env: dict[str, str] | None = None,
+        tty: bool = False,
+    ) -> CliResult:
         child_env = {
-            k: v for k, v in os.environ.items() if k not in {"PORTALC_QUIET", "PYTHONPATH"}
+            k: v
+            for k, v in os.environ.items()
+            # FORCE_COLOR/TTY_COMPATIBLE make rich claim a terminal whatever the stream is,
+            # and `explore` gates its prompt on that; `tty` below decides it instead.
+            if k not in {"PORTALC_QUIET", "PYTHONPATH", "FORCE_COLOR", "TTY_COMPATIBLE"}
         }
         child_env["PYTHONPATH"] = str(ROOT / "src")
         child_env["COLUMNS"] = "200"  # rich wraps at the terminal width; keep assertions stable
         child_env.setdefault("DEMO_MARINA_USER", DEMO_USER)
         child_env.setdefault("DEMO_MARINA_PASS", DEMO_PASS)
         child_env.update(env or {})
+        argv = [sys.executable, "-m", "portalc", *args]
+        if tty:
+            code, output = _run_on_a_terminal(argv, cwd, child_env)
+            return CliResult(list(args), code, _plain(output), "")
         proc = subprocess.run(
-            [sys.executable, "-m", "portalc", *args],
+            argv,
             cwd=str(cwd) if cwd else None,
             env=child_env,
             capture_output=True,
             text=True,
             timeout=120,
         )
-        return CliResult(list(args), proc.returncode, proc.stdout, proc.stderr)
+        return CliResult(list(args), proc.returncode, _plain(proc.stdout), _plain(proc.stderr))
 
     return run
+
+
+def _run_on_a_terminal(argv: list[str], cwd: Path | None, env: dict[str, str]) -> tuple[int, str]:
+    """Run the CLI with a pty attached, for the branches that only fire for a human at a shell.
+
+    A pty has one stream, so stdout and stderr come back merged.
+    """
+    controller, terminal = pty.openpty()
+    proc = subprocess.Popen(
+        argv,
+        cwd=str(cwd) if cwd else None,
+        env=env,
+        stdin=terminal,
+        stdout=terminal,
+        stderr=terminal,
+    )
+    os.close(terminal)
+    chunks: list[bytes] = []
+    try:
+        while True:
+            try:
+                data = os.read(controller, 65536)
+            except OSError:  # EIO: the child closed the other end
+                break
+            if not data:
+                break
+            chunks.append(data)
+    finally:
+        os.close(controller)
+    return proc.wait(timeout=120), b"".join(chunks).decode(errors="replace")

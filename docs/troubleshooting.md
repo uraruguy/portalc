@@ -19,7 +19,7 @@ They are part of the interface: CI and the generated TypeScript client both bran
 |---|---|---|
 | `0` | Success | |
 | `1` | Generic portalc error | |
-| `2` | Usage or configuration | A bad flag, a missing `portal.yaml`, an unparseable flow, an unset `${VAR}` in `baseUrl`, or `explore` without `--yes` |
+| `2` | Usage or configuration | A bad flag, a missing `portal.yaml`, an unparseable flow, an unset `${VAR}` in `baseUrl`, or `explore` without `--yes` at a terminal |
 | `3` | Authentication | Credentials missing from the environment, or the portal sent us back to the login form |
 | `4` | Blocked | HTTP 403 or 429: anti-bot, rate limit, or an account that lost access |
 | `5` | Portal down | Unreachable, a 5xx, or the expected table was not on the page |
@@ -61,7 +61,7 @@ Code 6 and code 5 are deliberately different: "the partner changed the invoice t
 
 **`two dry runs of the same flow returned different rows` (exit 6).** portalc reads the page twice before writing a schema and refuses to compile a flow that is not reproducible. Pin the query — a month, an account, an explicit sort — and retry. If the portal is genuinely non-deterministic, a contract test cannot be built over it as it stands.
 
-**`schema not written (re-run with --yes to compile)` (exit 2).** Not a failure. Without `--yes`, `explore` shows you the schema it inferred and writes nothing. Re-run with `--yes` when the field names and types look right.
+**`schema not written (re-run with --yes to compile)` (exit 2).** Not a failure. Without `--yes`, `explore` shows you the schema it inferred and writes nothing. Re-run with `--yes` when the field names and types look right. This is the interactive path only: with output redirected or in CI there is no one to review the table, so `explore` compiles without the flag.
 
 **`no Chrome or Chromium binary on this machine` (exit 7).** `--engine chrome` needs a browser. Install Chrome or Chromium, point `PORTALC_CHROME_BINARY` at it, or drop the flag — the HTTP engine is what the demo and most of the tests use.
 

@@ -91,7 +91,7 @@ Three things worth noticing:
 - **Types are inferred, not guessed at runtime.** `net_eur` is a `number` and `issued_on` is a `date` from here on. A row that stops matching is an error, not a surprise `"3.687,71"` in your database.
 - **`cost  no LLM call`.** Every run says what it cost. On the HTTP engine, nothing.
 
-Drop `--yes` and portalc prints the same table, writes nothing, and exits 2 — a review step for when the portal is not a demo.
+Drop `--yes` at a terminal and portalc prints the same table, writes nothing, and exits 2 — a review step for when the portal is not a demo. Off a terminal, where there is nobody to review it, `explore` compiles as if `--yes` had been passed, so a script or a CI job does not hang on a review nobody will do.
 
 ## 5. Run the contract test
 

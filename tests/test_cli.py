@@ -112,8 +112,15 @@ def test_explore_compiles_the_demo_flow(cli, workspace: Path):
     assert (workspace / "portals/demo-marina/schemas/invoice.schema.json").is_file()
 
 
-def test_explore_without_yes_previews_and_refuses_to_compile(cli, workspace: Path):
+def test_explore_off_a_terminal_compiles_without_asking(cli, workspace: Path):
+    """No terminal means no one to answer, so scripts and CI get the compile, not a prompt."""
     result = cli("explore", cwd=workspace)
+    assert result.code == 0
+    assert (workspace / "portals/demo-marina/schemas/invoice.schema.json").is_file()
+
+
+def test_explore_on_a_terminal_previews_and_refuses_to_compile(cli, workspace: Path):
+    result = cli("explore", cwd=workspace, tty=True)
     assert result.code == 2
     assert "re-run with --yes" in result.output
     assert not (workspace / "portals/demo-marina/schemas/invoice.schema.json").exists()
