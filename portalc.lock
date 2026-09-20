@@ -2,7 +2,7 @@
   "apiVersion": "portalc/v1",
   "portals": {
     "demo-marina": {
-      "version": "0.1.1",
+      "version": "0.1.0",
       "flows": {
         "list-invoices": {
           "schema": "invoice",
