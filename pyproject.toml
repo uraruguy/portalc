@@ -36,8 +36,9 @@ dev = ["pytest>=8.0"]
 portalc = "portalc.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/portalc/portalc"
-Issues = "https://github.com/portalc/portalc/issues"
+Homepage = "https://github.com/uraruguy/portalc"
+Issues = "https://github.com/uraruguy/portalc/issues"
+Documentation = "https://github.com/uraruguy/portalc/tree/main/docs"
 
 [tool.setuptools.packages.find]
 where = ["src"]
