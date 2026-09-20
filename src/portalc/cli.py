@@ -103,7 +103,7 @@ def init_cmd(
     base_url: str = typer.Option("http://127.0.0.1:8787", "--base-url", help="Demo portal origin."),
     path: Optional[Path] = typer.Option(None, "--path", help="Workspace root (default: cwd)."),
 ) -> None:
-    """Create a portalc workspace. Start here."""
+    """Scaffold a new portalc workspace. A clone of portalc already has one."""
     ws = Workspace((path or Path.cwd()).resolve())
     banner("init", str(ws.root))
     if not demo:
@@ -128,8 +128,8 @@ def init_cmd(
 
 @app.command("demo")
 def demo_cmd(
-    port: int = typer.Option(8787, "--port", help="Port to bind."),
-    host: str = typer.Option("127.0.0.1", "--host"),
+    port: int = typer.Option(8787, "--port", help="Port to bind. Must match baseUrl in portal.yaml."),
+    host: str = typer.Option("127.0.0.1", "--host", help="Interface to bind. Keep the loopback default."),
     background: bool = typer.Option(False, "--background", help="Start and exit (tests / scripts)."),
 ) -> None:
     """Run the bundled Demo Marina partner portal."""
@@ -153,9 +153,9 @@ def demo_cmd(
 def explore_cmd(
     portal: str = typer.Argument(DEMO_PORTAL, help="Portal name under portals/."),
     flow: str = typer.Option("list-invoices", "--flow", help="Flow to compile."),
-    month: str = typer.Option(DEFAULT_MONTH, "--month"),
+    month: str = typer.Option(DEFAULT_MONTH, "--month", help="Month to compile against, YYYY-MM."),
     yes: bool = typer.Option(False, "--yes", "-y", help="Accept the inferred schema without a prompt."),
-    engine: str = typer.Option("http", "--engine", help="http (deterministic HTML) or chrome (real browser over CDP)."),
+    engine: str = typer.Option("http", "--engine", help="http: deterministic HTML, the default. chrome: a real browser over CDP."),
     agent: bool = typer.Option(False, "--agent", help="Let a browser-use agent find the page first (optional extra)."),
     cdp_url: Optional[str] = typer.Option(None, "--cdp-url", help="Attach to a Chrome you already signed into, e.g. http://127.0.0.1:9222."),
     headless: bool = typer.Option(False, "--headless", help="Chrome without a window (no human login possible)."),
@@ -202,7 +202,7 @@ def explore_cmd(
 
 
 @app.command("build")
-def build_cmd(portal: str = typer.Argument(DEMO_PORTAL)) -> None:
+def build_cmd(portal: str = typer.Argument(DEMO_PORTAL, help="Portal whose client to generate.")) -> None:
     """Generate the typed TypeScript client from the compiled schema."""
     ws = _ws()
     banner("build", portal)
@@ -215,9 +215,9 @@ def build_cmd(portal: str = typer.Argument(DEMO_PORTAL)) -> None:
 @app.command("verify")
 def verify_cmd(
     portal: Optional[str] = typer.Argument(None, help="Portal to verify. Omit to run --all."),
-    flow: Optional[str] = typer.Option(None, "--flow"),
+    flow: Optional[str] = typer.Option(None, "--flow", help="Single flow to check. Default: every compiled flow."),
     all_portals: bool = typer.Option(False, "--all", help="Every compiled portal in the workspace."),
-    month: str = typer.Option(DEFAULT_MONTH, "--month"),
+    month: str = typer.Option(DEFAULT_MONTH, "--month", help="Month to check against, YYYY-MM."),
     engine: Optional[str] = typer.Option(None, "--engine", help="Override the engine the flow was compiled with."),
     cdp_url: Optional[str] = typer.Option(None, "--cdp-url", help="Attach to a running Chrome instead of starting one."),
     headless: bool = typer.Option(False, "--headless", help="Run Chrome without a window (CI)."),
@@ -253,9 +253,9 @@ def verify_cmd(
 
 @app.command("repair")
 def repair_cmd(
-    portal: str = typer.Argument(DEMO_PORTAL),
-    flow: str = typer.Option("list-invoices", "--flow"),
-    month: str = typer.Option(DEFAULT_MONTH, "--month"),
+    portal: str = typer.Argument(DEMO_PORTAL, help="Portal that drifted."),
+    flow: str = typer.Option("list-invoices", "--flow", help="Flow to repair."),
+    month: str = typer.Option(DEFAULT_MONTH, "--month", help="Month to re-read, YYYY-MM."),
     engine: Optional[str] = typer.Option(None, "--engine", help="Override the engine the flow was compiled with."),
     agent: bool = typer.Option(False, "--agent", help="If the rename patch does not apply, ask a browser-use agent where the data moved."),
     cdp_url: Optional[str] = typer.Option(None, "--cdp-url", help="Attach to a running Chrome instead of starting one."),
@@ -294,8 +294,8 @@ def repair_cmd(
 
 @app.command("run")
 def run_cmd(
-    portal: str = typer.Argument(...),
-    flow: str = typer.Argument(...),
+    portal: str = typer.Argument(..., help="Compiled portal name, as in portals/."),
+    flow: str = typer.Argument(..., help="Compiled flow name, e.g. list-invoices."),
     set_pairs: list[str] = typer.Option(None, "--set", help="key=value flow params, e.g. month=2026-09"),
     json_out: bool = typer.Option(False, "--json", help="Print rows as JSON (also used by the generated TS client)."),
     engine: Optional[str] = typer.Option(None, "--engine", help="Override the engine the flow was compiled with."),
@@ -344,9 +344,9 @@ def doctor_cmd() -> None:
     findings_table(doctor(ws))
     next_steps(
         [
-            "portalc init --demo",
-            "portalc demo",
-            "portalc explore --yes && portalc verify",
+            "portalc demo            start the bundled marina in another terminal",
+            "portalc explore --yes   compile list-invoices against it",
+            "portalc verify          run the contract test",
         ]
     )
 

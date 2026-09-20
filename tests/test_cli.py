@@ -99,7 +99,7 @@ def test_the_scaffolded_env_example_holds_names_and_a_demo_pair_only(cli, tmp_pa
     cli("init", "--demo", cwd=tmp_path)
     body = (tmp_path / ".env.example").read_text()
     assert "DEMO_MARINA_USER" in body and "DEMO_MARINA_PASS" in body
-    assert "Names only in git" in body
+    assert "never the values" in body
 
 
 # -- the compiled workspace ----------------------------------------------

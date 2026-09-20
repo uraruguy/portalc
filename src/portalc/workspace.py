@@ -202,7 +202,7 @@ class PortalConfig:
             raise ConfigError(
                 f"portal {name!r} is not configured",
                 [f"expected {path}", f"portals in this workspace: {listing}"],
-                hint="portalc init --portal <name>   (or `portalc init --demo` for the bundled demo)",
+                hint="check the name against `portals/`; v0.1 scaffolds the bundled demo with `portalc init --demo`",
             )
         return cls.from_file(path)
 
