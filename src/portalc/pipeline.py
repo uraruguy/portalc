@@ -89,10 +89,32 @@ flows:
 """
 
 ENV_EXAMPLE = """\
-# Names only in git. Copy to .env and keep .env out of version control.
+# portalc reads credentials from the environment, never from a tracked file.
+#
+#   cp .env.example .env     then put your real values in .env
+#
+# .env is gitignored; .env.example is the only one that belongs in a commit.
+# portal.yaml stores the *names* below under auth.secrets — never the values.
+
+# --- bundled Demo Marina portal -------------------------------------------
+# Synthetic portal, published credentials, safe to keep as-is. The demo also
+# works with no .env at all: portalc falls back to exactly these values.
 DEMO_MARINA_USER=skipper@demo-marina.test
 DEMO_MARINA_PASS=demo-portal-password
+
+# Only read when you start the demo server directly
+# (python demo/portal/server.py). `portalc demo --port` overrides it, and the
+# port must match baseUrl in portals/demo-marina/portal.yaml.
 DEMO_MARINA_PORT=8787
+
+# --- your own portal ------------------------------------------------------
+# One variable per secret named in portals/<name>/portal.yaml, for example:
+#
+#   ACME_PORTAL_USER=you@example.com
+#   ACME_PORTAL_PASS=
+#
+# In CI these are repository secrets with the same names. Leave real values
+# out of this file even as a placeholder — see SECURITY.md.
 """
 
 ACTION_YML = """\
@@ -139,7 +161,7 @@ def init_demo(ws: Workspace, *, base_url: str = "http://127.0.0.1:8787", force: 
         raise UsageError(
             f"portal {DEMO_PORTAL!r} already exists",
             str(yaml_path),
-            hint="re-run with --force to overwrite, or pick a new --portal name",
+            hint="nothing to do if you cloned portalc — try `portalc demo`; use --force to re-scaffold, or --path for a new workspace",
         )
     portal_dir.mkdir(parents=True, exist_ok=True)
     (portal_dir / "flows").mkdir(exist_ok=True)
