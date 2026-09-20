@@ -71,10 +71,10 @@ portalc verify  --engine chrome --headless     # nightly, session from the profi
 |---|---|---|
 | Chrome or Chromium on `PATH` | the engine speaks CDP to it | `portalc doctor` says so; use `--engine http` |
 | a desktop session, **or** `--headless` | a human cannot sign in to a headless window | `--headless` works for portals whose `auth.mode` is `form` |
-| `~/.portalc/chrome-profile` (or `--chrome-profile`) | keeps the session a human signed in with, so 2FA is not asked twice | a fresh profile means signing in again |
+| `~/.portalc/chrome-profile` (or `--chrome-profile`) | keeps the cookies the portal marked persistent, so a remember-me session survives between runs | a portal that only sets a session cookie needs your own Chrome kept open and `--cdp-url` |
 | nothing else | no Playwright, no browser framework, no API key | — |
 
-Attaching is the interesting mode: start your own Chrome with `--remote-debugging-port=9222`, sign in as yourself, then point portalc at it. portalc never types your password and there is no automated path past 2FA — for `auth.mode: human-session` it opens the page, waits for you, and inherits the session.
+Attaching is the interesting mode: start your own Chrome with `--remote-debugging-port=9222`, sign in as yourself, then point portalc at it. portalc never types your password and there is no automated path past 2FA — for `auth.mode: human-session` it opens the page, waits for you, and inherits the session. A stale session is reported as `PortalAuthError` (exit 3), never as a failed schema check: a human is needed, not a retry.
 
 Environment equivalents, for CI: `PORTALC_CDP_URL`, `PORTALC_CHROME_HEADLESS=1`, `PORTALC_CHROME_PROFILE`, `PORTALC_CHROME_BINARY`, `PORTALC_CHROME_TIMEOUT`.
 

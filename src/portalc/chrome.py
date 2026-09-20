@@ -506,7 +506,7 @@ class ChromeEngine:
             raise PortalAuthError(
                 "the session is not authenticated",
                 result.url,
-                hint="run `portalc explore --engine chrome` and sign in; the profile keeps the session for later runs",
+                hint="sign in again with `portalc explore --engine chrome`, or keep your own Chrome open and attach with --cdp-url (a session-only cookie does not survive a browser restart)",
             )
         try:
             result.table = extract_table(result.html, marker=marker)
