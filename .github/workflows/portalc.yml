@@ -1,0 +1,33 @@
+name: portalc verify
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+  push:
+    paths:
+      - "portals/**"
+      - "src/portalc/**"
+      - "demo/**"
+      - ".github/workflows/portalc.yml"
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install portalc
+        run: pip install -e ".[dev]"
+      - name: Start demo portal
+        run: |
+          python demo/portal/server.py --port 8787 &
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:8787/healthz && break
+            sleep 0.2
+          done
+      - name: Verify compiled flows
+        env:
+          DEMO_MARINA_USER: skipper@demo-marina.test
+          DEMO_MARINA_PASS: demo-portal-password
+        run: portalc verify --all

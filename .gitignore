@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+
+# Node
+node_modules/
+*.tsbuildinfo
+
+# Secrets — never commit real values. Only .env.example is tracked.
+.env
+.env.*
+!.env.example
+
+# Local run state (browser profiles, demo portal runtime state, transient runs)
+.portalc/
+demo/portal/.state.json
+demo/portal/.server.pid
+demo/portal/.server.log
+
+# Evidence screenshots are committed on purpose (see portals/*/evidence), but
+# ad-hoc local captures are not.
+.portalc-tmp/

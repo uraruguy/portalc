@@ -1,0 +1,50 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "portalc"
+version = "0.1.0"
+description = "Compile a login-walled portal into a versioned, typed dependency: schema, typed client, contract test, drift PR."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "portalc contributors" }]
+keywords = ["browser-use", "cdp", "integration", "contract-testing", "codegen", "drift"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Topic :: Software Development :: Code Generators",
+]
+dependencies = [
+  "typer>=0.12",
+  "rich>=13.7",
+  "jsonschema>=4.21",
+  "PyYAML>=6.0",
+  "websocket-client>=1.7",
+]
+
+[project.optional-dependencies]
+# The LLM agent is used in exactly two places: `portalc explore` and `portalc repair`.
+# Everything else (runtime, verify, build) is deterministic and needs none of this.
+agent = ["browser-use>=0.13"]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+portalc = "portalc.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/portalc/portalc"
+Issues = "https://github.com/portalc/portalc/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+portalc = ["templates/**/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

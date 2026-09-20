@@ -1,0 +1,38 @@
+{
+  "apiVersion": "portalc/v1",
+  "name": "list-invoices",
+  "schema": "invoice",
+  "engine": "http",
+  "params": {
+    "month": {
+      "type": "string",
+      "default": "2026-09"
+    }
+  },
+  "steps": [
+    {
+      "action": "login",
+      "path": "/login"
+    },
+    {
+      "action": "extract_table",
+      "path": "/invoices",
+      "query": {
+        "month": "{{month}}"
+      },
+      "marker": "invoices",
+      "headerContract": [
+        "Invoice no.",
+        "Issued",
+        "Due",
+        "Berth",
+        "Vessel",
+        "Net (EUR)",
+        "VAT (EUR)",
+        "Total (EUR)",
+        "Currency",
+        "Status"
+      ]
+    }
+  ]
+}

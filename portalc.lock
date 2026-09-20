@@ -1,0 +1,16 @@
+{
+  "apiVersion": "portalc/v1",
+  "portals": {
+    "demo-marina": {
+      "version": "0.1.1",
+      "flows": {
+        "list-invoices": {
+          "schema": "invoice",
+          "flowSha256": "ddb8f95a2141ca093128812d2b74fe24e4ba2fcfc87284f5876a3404d5f66e23",
+          "schemaSha256": "22fb92968b40e99ffbeec0fdc195f1ac94751048dfda7af313cae086229d74f0",
+          "lastGreenAt": "2026-09-20T18:49:55Z"
+        }
+      }
+    }
+  }
+}

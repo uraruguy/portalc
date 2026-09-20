@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Invoice",
+  "type": "array",
+  "minItems": 1,
+  "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "number": {
+        "type": "string"
+      },
+      "issued_on": {
+        "type": "string",
+        "format": "date"
+      },
+      "due_on": {
+        "type": "string",
+        "format": "date"
+      },
+      "berth": {
+        "type": "string"
+      },
+      "vessel": {
+        "type": "string"
+      },
+      "net_eur": {
+        "type": "number"
+      },
+      "vat_eur": {
+        "type": "number"
+      },
+      "total_eur": {
+        "type": "number"
+      },
+      "currency": {
+        "type": "string"
+      },
+      "status": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "number",
+      "issued_on",
+      "due_on",
+      "berth",
+      "vessel",
+      "net_eur",
+      "vat_eur",
+      "total_eur",
+      "currency",
+      "status"
+    ]
+  },
+  "x-portalc": {
+    "headers": {
+      "number": "Invoice no.",
+      "issued_on": "Issued",
+      "due_on": "Due",
+      "berth": "Berth",
+      "vessel": "Vessel",
+      "net_eur": "Net (EUR)",
+      "vat_eur": "VAT (EUR)",
+      "total_eur": "Total (EUR)",
+      "currency": "Currency",
+      "status": "Status"
+    },
+    "marker": "invoices",
+    "selector": "[data-portalc='invoices']"
+  }
+}

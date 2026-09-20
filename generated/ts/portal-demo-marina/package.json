@@ -1,0 +1,9 @@
+{
+  "name": "@portalc/portal-demo-marina",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./index.ts",
+  "types": "./index.ts",
+  "description": "Generated typed client for the demo-marina portal. Run via portalc."
+}

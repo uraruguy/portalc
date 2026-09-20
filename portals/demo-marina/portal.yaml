@@ -1,0 +1,20 @@
+apiVersion: portalc/v1
+name: demo-marina
+title: Demo Marina Partner Portal
+baseUrl: http://127.0.0.1:8787
+auth:
+  mode: form
+  loginPath: /login
+  secrets:
+    username: DEMO_MARINA_USER
+    password: DEMO_MARINA_PASS
+policy:
+  readOnly: true
+  allowedDomains:
+    - 127.0.0.1
+    - localhost
+  notes: >
+    Bundled synthetic portal. Own-account demo credentials only.
+    This is not a real marina and must not be pointed at production systems.
+flows:
+  - list-invoices
