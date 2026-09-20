@@ -1,16 +1,42 @@
-name: portalc verify
+name: portalc
 on:
+  push:
+    branches:
+      - master
+      - main
+  pull_request:
   schedule:
     - cron: "0 3 * * *"
   workflow_dispatch:
-  push:
-    paths:
-      - "portals/**"
-      - "src/portalc/**"
-      - "demo/**"
-      - ".github/workflows/portalc.yml"
+
+concurrency:
+  group: portalc-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DEMO_MARINA_USER: skipper@demo-marina.test
+  DEMO_MARINA_PASS: demo-portal-password
+
 jobs:
-  verify:
+  tests:
+    name: tests (python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install portalc
+        run: pip install -e ".[dev]"
+      - name: Run the test suite
+        run: python -m pytest -q --durations=10
+
+  demo:
+    name: five-minute demo (explore → verify → drift → repair)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -19,15 +45,120 @@ jobs:
           python-version: "3.12"
       - name: Install portalc
         run: pip install -e ".[dev]"
-      - name: Start demo portal
+
+      - name: portalc doctor
+        run: portalc doctor
+
+      - name: Start the bundled demo portal
         run: |
           python demo/portal/server.py --port 8787 &
-          for i in $(seq 1 30); do
-            curl -sf http://127.0.0.1:8787/healthz && break
+          pid=$!
+          echo "DEMO_PID=$pid" >> "$GITHUB_ENV"
+          for _ in $(seq 1 50); do
+            # A healthz answer is only ours if our own process is still alive to give it.
+            if ! kill -0 "$pid" 2>/dev/null; then
+              echo "demo portal exited before it was ready" >&2
+              exit 1
+            fi
+            if curl -sf http://127.0.0.1:8787/healthz >/dev/null; then
+              echo "demo portal is up (pid $pid)"
+              exit 0
+            fi
             sleep 0.2
           done
-      - name: Verify compiled flows
-        env:
-          DEMO_MARINA_USER: skipper@demo-marina.test
-          DEMO_MARINA_PASS: demo-portal-password
+          echo "demo portal never answered /healthz" >&2
+          exit 1
+
+      - name: Compile the flow from scratch, the way the README does
+        run: |
+          workspace="$(mktemp -d)"
+          cd "$workspace"
+          portalc init --demo --base-url http://127.0.0.1:8787
+          portalc explore --yes
+          portalc verify
+          portalc build demo-marina
+          portalc run demo-marina list-invoices --json > rows.json
+          python - <<'PY'
+          import json, pathlib
+          rows = json.loads(pathlib.Path("rows.json").read_text())
+          assert len(rows) >= 6, rows
+          assert rows[0]["currency"] == "EUR", rows[0]
+          assert isinstance(rows[0]["total_eur"], float), rows[0]
+          print(f"{len(rows)} typed rows")
+          PY
+
+      - name: The shipped contract is green
+        run: portalc verify --all
+
+      - name: A renamed column breaks the contract (exit 8)
+        run: |
+          python demo/mutate.py rename-total
+          set +e
+          portalc verify --all
+          code=$?
+          set -e
+          if [ "$code" -ne 8 ]; then
+            echo "expected verify to fail with exit 8, got $code" >&2
+            exit 1
+          fi
+
+      - name: portalc repair writes the patch
+        run: |
+          portalc repair demo-marina
+          portalc verify --all
+
+      - name: The patch is an ordinary reviewable diff
+        run: |
+          git --no-pager diff --stat
+          git --no-pager diff -- portals/demo-marina/schemas/invoice.schema.json
+          git diff --name-only | grep -qx "portals/demo-marina/schemas/invoice.schema.json"
+          git diff --name-only | grep -qx "portals/demo-marina/flows/list-invoices.flow.json"
+          git diff --name-only | grep -qx "portalc.lock"
+          git diff -- portals/demo-marina/schemas/invoice.schema.json | grep -q '^-.*Total (EUR)'
+          git diff -- portals/demo-marina/schemas/invoice.schema.json | grep -q '^+.*Amount (EUR)'
+          test "$(python -c 'import json;print(json.load(open("portalc.lock"))["portals"]["demo-marina"]["version"])')" = "0.1.1"
+
+      - name: Upload the patch portalc would open a PR with
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: portalc-repair-patch
+          path: .portalc/repair-*.md
+          if-no-files-found: ignore
+
+      - name: Put the demo portal back
+        if: always()
+        run: |
+          python demo/mutate.py reset
+          git checkout -- .
+          if [ -n "${DEMO_PID:-}" ]; then kill "$DEMO_PID" || true; fi
+
+  verify:
+    name: nightly contract test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install portalc
+        run: pip install -e ".[dev]"
+      - name: Start the portal this workspace compiles against
+        run: |
+          python demo/portal/server.py --port 8787 &
+          pid=$!
+          for _ in $(seq 1 50); do
+            if ! kill -0 "$pid" 2>/dev/null; then
+              echo "demo portal exited before it was ready" >&2
+              exit 1
+            fi
+            if curl -sf http://127.0.0.1:8787/healthz >/dev/null; then
+              echo "demo portal is up (pid $pid)"
+              exit 0
+            fi
+            sleep 0.2
+          done
+          echo "demo portal never answered /healthz" >&2
+          exit 1
+      - name: Verify every compiled flow
         run: portalc verify --all
