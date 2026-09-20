@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -25,18 +26,33 @@ from typing import Any
 import yaml
 
 from .errors import ConfigError
+from .policy import SECRETS, RequestPolicy, assert_no_secrets
 
 API_VERSION = "portalc/v1"
 _ENV_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
 
 
-def expand_env(value: str, env: dict[str, str] | None = None) -> str:
-    """Expand ${VAR} and ${VAR:-default}. Values never get written back to disk."""
+def expand_env(
+    value: str,
+    env: dict[str, str] | None = None,
+    *,
+    secret_names: Sequence[str] = (),
+) -> str:
+    """Expand ${VAR} and ${VAR:-default}.
+
+    Expansion happens in memory, at call time. Anything expanded from a
+    variable the portal declares under `auth.secrets` is registered with
+    `policy.SECRETS`, which is what makes `write_json` able to refuse writing
+    it back out: the raw `${VAR}` form is the only form that reaches disk.
+    """
     source = env if env is not None else os.environ
+    secret = {n for n in secret_names}
 
     def repl(m: re.Match[str]) -> str:
         name, default = m.group(1), m.group(2)
         if name in source:
+            if name in secret:
+                SECRETS.register(source[name])
             return source[name]
         if default is not None:
             return default
@@ -120,7 +136,7 @@ class PortalConfig:
 
     @property
     def base_url(self) -> str:
-        return expand_env(self.base_url_raw).rstrip("/")
+        return expand_env(self.base_url_raw, secret_names=self.secret_env_names).rstrip("/")
 
     @property
     def auth_mode(self) -> str:
@@ -131,12 +147,29 @@ class PortalConfig:
         return [SecretRef(k, v) for k, v in (self.auth.get("secrets") or {}).items()]
 
     @property
+    def secret_env_names(self) -> list[str]:
+        return [ref.env for ref in self.secrets]
+
+    @property
+    def login_path(self) -> str:
+        return str(self.auth.get("loginPath") or "/login")
+
+    @property
     def allowed_domains(self) -> list[str]:
         return list(self.policy.get("allowedDomains") or [])
 
     @property
     def read_only(self) -> bool:
         return bool(self.policy.get("readOnly", True))
+
+    @property
+    def request_policy(self) -> RequestPolicy:
+        """The parsed `policy:` block the engine enforces on every request."""
+        return RequestPolicy.from_policy(
+            self.policy,
+            base_url=self.base_url,
+            login_path=self.login_path,
+        )
 
     def flow_path(self, flow: str) -> Path:
         return self.dir / "flows" / f"{flow}.flow.json"
@@ -211,6 +244,7 @@ class PortalConfig:
                 missing.append(ref.env)
             else:
                 out[ref.key] = value
+                SECRETS.register(value)
         if missing:
             raise PortalAuthError(
                 "portal credentials are not in the environment",
@@ -230,5 +264,13 @@ def read_json(path: Path, what: str = "file") -> dict[str, Any]:
 
 
 def write_json(path: Path, payload: Any) -> None:
+    """Write a portalc artifact — after checking it holds no credential value.
+
+    Every artifact portalc commits (flow, schema, checks, fixture, lockfile)
+    goes through here, so this is the one place the no-secret guarantee has to
+    hold.
+    """
+    text = json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
+    assert_no_secrets(text, where=str(path))
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
+    path.write_text(text)
