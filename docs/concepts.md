@@ -40,7 +40,7 @@ portalc.lock                         version, artifact hashes, last green run pe
 
 **The fixture and the evidence file** are the receipts. When a partner insists nothing changed on their side, the fixture is what the portal returned and the evidence is the markup it came from. They are also why you should read both before the first commit against a real portal: that is your data. See [SECURITY.md](../SECURITY.md#before-you-commit-compiled-artifacts).
 
-**`portalc.lock`** carries a version per portal, a SHA-256 of the flow and the schema, and `lastGreenAt`. It is how `verify` knows which artifacts it is testing and how `repair` knows what to bump.
+**`portalc.lock`** carries a version per portal, a SHA-256 of the flow and the schema, and `lastGreenAt`. `repair` uses it to know what to bump. `verify` records a green run in it but does not check the hashes yet.
 
 ## Drift is the product
 

@@ -77,7 +77,7 @@ Beyond that shape, the honest list of what is missing: pagination, multi-step na
 
 ## Once a flow is compiled
 
-Everything after `explore` is portal-agnostic and works today:
+`verify`, `build` and `run` are portal-agnostic once a flow exists. `repair` is not yet: it relies on the demo's `data-col` attributes to recognise a rename (see [Known gaps](../README.md#known-gaps)).
 
 ```bash
 portalc verify acme-partner            # contract test: headers, schema, checks
